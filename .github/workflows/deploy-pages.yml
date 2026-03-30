@@ -1,0 +1,122 @@
+name: Deploy Support Site to GitHub Pages
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare deploy directory
+        run: |
+          mkdir -p deploy_dir
+
+          # Loop through each language directory in support_assets
+          for lang_dir in support_assets/*/; do
+            if [ -d "$lang_dir" ]; then
+              lang=$(basename "$lang_dir")
+              echo "Processing language: $lang"
+              mkdir -p "deploy_dir/$lang"
+              
+              # Copy README.md as index.md for Jekyll
+              if [ -f "${lang_dir}README.md" ]; then
+                cp "${lang_dir}README.md" "deploy_dir/$lang/index.md"
+              fi
+              
+              # Copy PRIVACY_POLICY.md
+              if [ -f "${lang_dir}PRIVACY_POLICY.md" ]; then
+                cp "${lang_dir}PRIVACY_POLICY.md" "deploy_dir/$lang/"
+              fi
+            fi
+          done
+
+          # Set English as the default root page (fallback)
+          if [ -f support_assets/en/README.md ]; then
+            # Create a specialized root index.md with redirection script
+            cat > deploy_dir/index.md << 'EOF'
+          <script>
+          (function() {
+            const supported = ['ja', 'ko', 'zh-Hans', 'es', 'fr', 'de', 'pt-BR'];
+            const params = new URLSearchParams(window.location.search);
+            const langParam = params.get('lang');
+            
+            // 1. Handle explicit ?lang= parameter
+            if (langParam && supported.includes(langParam)) {
+              window.location.href = window.location.pathname.replace(/\/$/, '') + '/' + langParam + '/';
+              return;
+            }
+
+            // 2. Auto-detect browser language if at root
+            const isRoot = window.location.pathname.endsWith('/zuan_support/') || window.location.pathname.endsWith('/zuan_support/index.html');
+            if (isRoot && !langParam) {
+              const browserLang = navigator.language.split('-')[0];
+              const browserLangFull = navigator.language;
+              let target = null;
+
+              if (supported.includes(browserLangFull)) target = browserLangFull;
+              else if (supported.includes(browserLang)) target = browserLang;
+              else if (browserLang === 'zh') target = 'zh-Hans';
+
+              if (target) {
+                window.location.href = window.location.pathname.replace(/\/$/, '') + '/' + target + '/';
+              }
+            }
+          })();
+          </script>
+          EOF
+            cat support_assets/en/README.md >> deploy_dir/index.md
+          fi
+          
+          if [ -f support_assets/en/PRIVACY_POLICY.md ]; then
+            cp support_assets/en/PRIVACY_POLICY.md deploy_dir/
+          fi
+
+      - name: Generate Jekyll config
+        run: |
+          cat > deploy_dir/_config.yml << 'EOF'
+          title: Zuan Support
+          description: Official support site for Zuan — Podcast/Audio Player & AI-Powered Transcription
+          theme: jekyll-theme-cayman
+          url: "https://antelope424.github.io"
+          baseurl: "/zuan_support"
+          markdown: kramdown
+          plugins:
+            - jekyll-seo-tag
+          EOF
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Build with Jekyll
+        uses: actions/jekyll-build-pages@v1
+        with:
+          source: ./deploy_dir
+          destination: ./_site
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
